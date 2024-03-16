@@ -180,7 +180,7 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
 
             _brokerage.NewBrokerageOrderNotification += (sender, e) =>
             {
-                AddOpenOrder(e.Order, _algorithm);
+                HandleNewBrokerageSideOrder(e);
             };
 
             _brokerage.DelistingNotification += (sender, e) =>
@@ -774,6 +774,10 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
             // ensure the order is tagged with a currency
             var security = _algorithm.Securities[order.Symbol];
             order.PriceCurrency = security.SymbolProperties.QuoteCurrency;
+            if (string.IsNullOrEmpty(order.Tag))
+            {
+                order.Tag = order.GetDefaultTag();
+            }
 
             // rounds off the order towards 0 to the nearest multiple of lot size
             order.Quantity = RoundOffOrder(order, security);
@@ -1449,7 +1453,7 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
                             // If the quantity is already 0 for Lean and the brokerage there is nothing else todo here
                             if (quantity != 0)
                             {
-                                var exerciseOrder = GenerateOptionExerciseOrder(security, quantity);
+                                var exerciseOrder = GenerateOptionExerciseOrder(security, quantity, e.Tag);
 
                                 EmitOptionNotificationEvents(security, exerciseOrder);
                             }
@@ -1510,7 +1514,7 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
                                 {
                                     var quantity = e.Position - security.Holdings.Quantity;
 
-                                    var exerciseOrder = GenerateOptionExerciseOrder(security, quantity);
+                                    var exerciseOrder = GenerateOptionExerciseOrder(security, quantity, e.Tag);
 
                                     EmitOptionNotificationEvents(security, exerciseOrder);
                                 }
@@ -1521,10 +1525,31 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
             }
         }
 
-        private OptionExerciseOrder GenerateOptionExerciseOrder(Security security, decimal quantity)
+        /// <summary>
+        /// New brokerage-side order event handler
+        /// </summary>
+        private void HandleNewBrokerageSideOrder(NewBrokerageOrderNotificationEventArgs e)
+        {
+            void onError(IReadOnlyCollection<SecurityType> supportedSecurityTypes) =>
+                _algorithm.Debug($"Warning: New brokerage-side order could not be processed due to " +
+                    $"it's security not being supported. Supported security types are {string.Join(", ", supportedSecurityTypes)}");
+
+            if (_algorithm.BrokerageMessageHandler.HandleOrder(e) &&
+                _algorithm.GetOrAddUnrequestedSecurity(e.Order.Symbol, out _, onError))
+            {
+                AddOpenOrder(e.Order, _algorithm);
+            }
+        }
+
+        private OptionExerciseOrder GenerateOptionExerciseOrder(Security security, decimal quantity, string tag)
         {
             // generate new exercise order and ticket for the option
-            var order = new OptionExerciseOrder(security.Symbol, quantity, CurrentTimeUtc);
+            var order = new OptionExerciseOrder(security.Symbol, quantity, CurrentTimeUtc, tag);
+
+            // save current security prices
+            order.OrderSubmissionData = new OrderSubmissionData(security.BidPrice, security.AskPrice, security.Close);
+            order.PriceCurrency = security.SymbolProperties.QuoteCurrency;
+
             AddOpenOrder(order, _algorithm);
             return order;
         }

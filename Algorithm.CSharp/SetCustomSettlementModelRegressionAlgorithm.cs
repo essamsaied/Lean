@@ -15,7 +15,6 @@
 
 using QuantConnect.Data;
 using QuantConnect.Securities;
-using QuantConnect.Brokerages;
 using System;
 using QuantConnect.Interfaces;
 using System.Collections.Generic;
@@ -87,7 +86,7 @@ namespace QuantConnect.Algorithm.CSharp
         /// </summary>
         public Dictionary<string, string> ExpectedStatistics => new Dictionary<string, string>
         {
-            {"Total Trades", "0"},
+            {"Total Orders", "0"},
             {"Average Win", "0%"},
             {"Average Loss", "0%"},
             {"Compounding Annual Return", "108.257%"},
@@ -132,6 +131,14 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 settlementParameters.Portfolio.CashBook[_currency].AddAmount(-_amount);
             }
+        }
+
+        /// <summary>
+        /// Gets the unsettled cash amount for the security
+        /// </summary>
+        public CashAmount GetUnsettledCash()
+        {
+            return default;
         }
     }
 }

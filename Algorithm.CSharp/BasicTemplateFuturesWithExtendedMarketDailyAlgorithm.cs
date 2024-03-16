@@ -43,14 +43,14 @@ namespace QuantConnect.Algorithm.CSharp
         /// <summary>
         /// Data Points count of all timeslices of algorithm
         /// </summary>
-        public override long DataPoints => 16263;
+        public override long DataPoints => 16265;
 
         /// <summary>
         /// This is used by the regression test system to indicate what the expected statistics are from running the algorithm
         /// </summary>
         public override Dictionary<string, string> ExpectedStatistics => new Dictionary<string, string>
         {
-            {"Total Trades", "156"},
+            {"Total Orders", "156"},
             {"Average Win", "0.31%"},
             {"Average Loss", "-0.01%"},
             {"Compounding Annual Return", "-0.024%"},

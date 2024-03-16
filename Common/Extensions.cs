@@ -58,6 +58,7 @@ using QuantConnect.Securities.Future;
 using QuantConnect.Securities.FutureOption;
 using QuantConnect.Securities.Option;
 using QuantConnect.Statistics;
+using Newtonsoft.Json.Linq;
 
 namespace QuantConnect
 {
@@ -94,6 +95,29 @@ namespace QuantConnect
         /// like future options the market close would match the delisted event time and would cancel all orders and mark the security
         /// as non tradable and delisted.</remarks>
         public static TimeSpan DelistingMarketCloseOffsetSpan { get; set; } = TimeSpan.FromMinutes(-15);
+
+        /// <summary>
+        /// Helper method to get a property in a jobject if available
+        /// </summary>
+        /// <typeparam name="T">The property type</typeparam>
+        /// <param name="jObject">The jobject source</param>
+        /// <param name="name">The property name</param>
+        /// <returns>The property value if present or it's default value</returns>
+        public static T TryGetPropertyValue<T>(this JObject jObject, string name)
+        {
+            T result = default;
+            if (jObject == null)
+            {
+                return result;
+            }
+
+            var jValue = jObject[name];
+            if (jValue != null && jValue.Type != JTokenType.Null)
+            {
+                result = jValue.Value<T>();
+            }
+            return result;
+        }
 
         /// <summary>
         /// Determine if the file is out of date according to our download period.
@@ -428,12 +452,6 @@ namespace QuantConnect
                         // this way we only keep the most updated version
                         resultPacket.Orders = resultPacket.Orders.GroupBy(order => order.Id)
                             .Select(ordersGroup => ordersGroup.Last()).ToList();
-                    }
-
-                    if (newerPacket.Portfolio != null)
-                    {
-                        // we just keep the newest state if not null
-                        resultPacket.Portfolio = newerPacket.Portfolio;
                     }
                 }
             }
@@ -2566,10 +2584,13 @@ namespace QuantConnect
                     {
                         result = (T)pyObject.AsManagedObject(type);
                         // pyObject is a C# object wrapped in PyObject, in this case return true
+                        if(!pyObject.HasAttr("__name__"))
+                        {
+                            return true;
+                        }
                         // Otherwise, pyObject is a python object that subclass a C# class, only return true if 'allowPythonDerivative'
                         var castedResult = (Type)pyObject.AsManagedObject(type);
                         var pythonName = pyObject.GetAttr("__name__").GetAndDispose<string>();
-
                         return pythonName == castedResult.Name;
                     }
 
@@ -2692,12 +2713,12 @@ namespace QuantConnect
         /// </summary>
         /// <param name="universeFilterFunc">Universe filter function from Python</param>
         /// <returns>Function that provides <typeparamref name="T"/> and returns an enumerable of Symbols</returns>
-        public static Func<IEnumerable<T>, IEnumerable<Symbol>> ConvertPythonUniverseFilterFunction<T>(this PyObject universeFilterFunc)
+        public static Func<IEnumerable<T>, IEnumerable<Symbol>> ConvertPythonUniverseFilterFunction<T>(this PyObject universeFilterFunc) where T : BaseData
         {
             Func<IEnumerable<T>, object> convertedFunc;
             Func<IEnumerable<T>, IEnumerable<Symbol>> filterFunc = null;
 
-            if (universeFilterFunc.TryConvertToDelegate(out convertedFunc))
+            if (universeFilterFunc != null && universeFilterFunc.TryConvertToDelegate(out convertedFunc))
             {
                 filterFunc = convertedFunc.ConvertToUniverseSelectionSymbolDelegate();
             }
@@ -2712,13 +2733,37 @@ namespace QuantConnect
         /// <remarks>This method is a work around for the fact that currently we can not create a delegate which returns
         /// an <see cref="IEnumerable{Symbol}"/> from a python method returning an array, plus the fact that
         /// <see cref="Universe.Unchanged"/> can not be cast to an array</remarks>
-        public static Func<T, IEnumerable<Symbol>> ConvertToUniverseSelectionSymbolDelegate<T>(this Func<T, object> selector)
+        public static Func<IEnumerable<T>, IEnumerable<Symbol>> ConvertToUniverseSelectionSymbolDelegate<T>(this Func<IEnumerable<T>, object> selector) where T : BaseData
+        {
+            if (selector == null)
+            {
+                return (dataPoints) => dataPoints.Select(x => x.Symbol);
+            }
+            return selector.ConvertSelectionSymbolDelegate();
+        }
+
+        /// <summary>
+        /// Wraps the provided universe selection selector checking if it returned <see cref="Universe.Unchanged"/>
+        /// and returns it instead, else enumerates result as <see cref="IEnumerable{Symbol}"/>
+        /// </summary>
+        /// <remarks>This method is a work around for the fact that currently we can not create a delegate which returns
+        /// an <see cref="IEnumerable{Symbol}"/> from a python method returning an array, plus the fact that
+        /// <see cref="Universe.Unchanged"/> can not be cast to an array</remarks>
+        public static Func<T, IEnumerable<Symbol>> ConvertSelectionSymbolDelegate<T>(this Func<T, object> selector)
         {
             return data =>
             {
                 var result = selector(data);
                 return ReferenceEquals(result, Universe.Unchanged)
-                    ? Universe.Unchanged : ((object[])result).Select(x => (Symbol)x);
+                    ? Universe.Unchanged
+                    : ((object[])result).Select(x =>
+                    {
+                        if (x is Symbol castedSymbol)
+                        {
+                            return castedSymbol;
+                        }
+                        return SymbolCache.TryGetSymbol((string)x, out var symbol) ? symbol : null;
+                    });
             };
         }
 
@@ -2892,6 +2937,38 @@ namespace QuantConnect
                 }
             }
         }
+
+        /// <summary>
+        /// Try to create a type with a given name, if PyObject is not a CLR type. Otherwise, convert it.
+        /// </summary>
+        /// <param name="pyObject">Python object representing a type.</param>
+        /// <param name="type">Type object</param>
+        /// <returns>True if was able to create the type</returns>
+        public static bool TryCreateType(this PyObject pyObject, out Type type)
+        {
+            if (pyObject.TryConvert(out type))
+            {
+                // handles pure C# types
+                return true;
+            }
+
+            if (!PythonActivators.TryGetValue(pyObject.Handle, out var pythonType))
+            {
+                // Some examples:
+                // pytype: "<class 'DropboxBaseDataUniverseSelectionAlgorithm.StockDataSource'>"
+                // method: "<bound method CoarseFineFundamentalComboAlgorithm.CoarseSelectionFunction of <CoarseFineFunda..."
+                // array: "[<QuantConnect.Symbol object at 0x000001EEF21ED480>]"
+                if (pyObject.ToString().StartsWith("<class '", StringComparison.InvariantCulture))
+                {
+                    type = CreateType(pyObject);
+                    return true;
+                }
+                return false;
+            }
+            type = pythonType.Type;
+            return true;
+        }
+
 
         /// <summary>
         /// Creates a type with a given name, if PyObject is not a CLR type. Otherwise, convert it.
@@ -3630,6 +3707,82 @@ namespace QuantConnect
             return algorithm.UniverseManager.Values.Where(universe => universe.Configuration.Symbol == symbol.Canonical || ContinuousContractUniverse.CreateSymbol(symbol.Canonical) == universe.Configuration.Symbol);
         }
 
+        private static bool _notifiedUniverseSettingsUsed;
+        private static readonly HashSet<SecurityType> _supportedSecurityTypes = new()
+        {
+            SecurityType.Equity,
+            SecurityType.Forex,
+            SecurityType.Cfd,
+            SecurityType.Option,
+            SecurityType.Future,
+            SecurityType.FutureOption,
+            SecurityType.IndexOption,
+            SecurityType.Crypto,
+            SecurityType.CryptoFuture
+        };
+
+        /// <summary>
+        /// Gets the security for the specified symbol from the algorithm's securities collection.
+        /// In case the security is not found, it will be created using the <see cref="IAlgorithm.UniverseSettings"/>
+        /// and a best effort configuration setup.
+        /// </summary>
+        /// <param name="algorithm">The algorithm instance</param>
+        /// <param name="symbol">The symbol which security is being looked up</param>
+        /// <param name="security">The found or added security instance</param>
+        /// <param name="onError">Callback to invoke in case of unsupported security type</param>
+        /// <returns>True if the security was found or added</returns>
+        public static bool GetOrAddUnrequestedSecurity(this IAlgorithm algorithm, Symbol symbol, out Security security,
+            Action<IReadOnlyCollection<SecurityType>> onError = null)
+        {
+            if (!algorithm.Securities.TryGetValue(symbol, out security))
+            {
+                if (!_supportedSecurityTypes.Contains(symbol.SecurityType))
+                {
+                    Log.Error("GetOrAddUnrequestedSecurity(): Unsupported security type: " + symbol.SecurityType + "-" + symbol.Value);
+                    onError?.Invoke(_supportedSecurityTypes);
+                    return false;
+                }
+
+                var resolution = algorithm.UniverseSettings.Resolution;
+                var fillForward = algorithm.UniverseSettings.FillForward;
+                var leverage = algorithm.UniverseSettings.Leverage;
+                var extendedHours = algorithm.UniverseSettings.ExtendedMarketHours;
+
+                if (!_notifiedUniverseSettingsUsed)
+                {
+                    // let's just send the message once
+                    _notifiedUniverseSettingsUsed = true;
+
+                    var leverageMsg = $" Leverage = {leverage};";
+                    if (leverage == Security.NullLeverage)
+                    {
+                        leverageMsg = $" Leverage = default;";
+                    }
+                    algorithm.Debug($"Will use UniverseSettings for automatically added securities for open orders and holdings. UniverseSettings:" +
+                        $" Resolution = {resolution};{leverageMsg} FillForward = {fillForward}; ExtendedHours = {extendedHours}");
+                }
+
+                Log.Trace("GetOrAddUnrequestedSecurity(): Adding unrequested security: " + symbol.Value);
+
+                if (symbol.SecurityType.IsOption())
+                {
+                    // add current option contract to the system
+                    security = algorithm.AddOptionContract(symbol, resolution, fillForward, leverage, extendedHours);
+                }
+                else if (symbol.SecurityType == SecurityType.Future)
+                {
+                    // add current future contract to the system
+                    security = algorithm.AddFutureContract(symbol, resolution, fillForward, leverage, extendedHours);
+                }
+                else
+                {
+                    // for items not directly requested set leverage to 1 and at the min resolution
+                    security = algorithm.AddSecurity(symbol.SecurityType, symbol.Value, resolution, symbol.ID.Market, fillForward, leverage, extendedHours);
+                }
+            }
+            return true;
+        }
+
         /// <summary>
         /// Inverts the specified <paramref name="right"/>
         /// </summary>
@@ -3951,6 +4104,24 @@ namespace QuantConnect
                 b = remainder;
             }
             return Math.Abs(a);
+        }
+
+        /// <summary>
+        /// Safe method to perform divisions avoiding DivideByZeroException and Overflow/Underflow exceptions
+        /// </summary>
+        /// <param name="failValue">Value to be returned if the denominator is zero</param>
+        /// <returns>The numerator divided by the denominator if the denominator is not
+        /// zero. Otherwise, the default failValue or the provided one</returns>
+        public static decimal SafeDivision(this decimal numerator, decimal denominator, decimal failValue = 0)
+        {
+            try
+            {
+                return (denominator == 0) ? failValue : (numerator / denominator);
+            }
+            catch
+            {
+                return failValue;
+            }
         }
     }
 }

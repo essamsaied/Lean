@@ -34,9 +34,9 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
         [Test, Category("TravisExclude")]
         public void DoesNotLeakMemory()
         {
-            var symbolFactory = new Fundamentals();
+            var symbolFactory = new FundamentalUniverse();
             var symbol = symbolFactory.UniverseSymbol();
-            var config = new SubscriptionDataConfig(typeof(Fundamentals), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
+            var config = new SubscriptionDataConfig(typeof(FundamentalUniverse), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
             var security = new Security(
                 SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
                 config,
@@ -79,9 +79,9 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
         [Test]
         public void ReturnsExpectedTimestamps()
         {
-            var symbolFactory = new Fundamentals();
+            var symbolFactory = new FundamentalUniverse();
             var symbol = symbolFactory.UniverseSymbol();
-            var config = new SubscriptionDataConfig(typeof(Fundamentals), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
+            var config = new SubscriptionDataConfig(typeof(FundamentalUniverse), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
             var security = new Security(
                 SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
                 config,
@@ -106,8 +106,7 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
 
             using (var enumerator = factory.CreateEnumerator(request, TestGlobals.DataProvider))
             {
-                dateStart = dateStart.AddDays(-1);
-                for (var i = 0; i <= days; i++)
+                for (var i = 0; i < days; i++)
                 {
                     Assert.IsTrue(enumerator.MoveNext());
 

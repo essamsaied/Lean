@@ -176,7 +176,7 @@ namespace QuantConnect.Algorithm.CSharp
         /// <summary>
         /// Data Points count of all timeslices of algorithm
         /// </summary>
-        public long DataPoints => 1333;
+        public long DataPoints => 1334;
 
         /// <summary>
         /// Data Points count of the algorithm history
@@ -188,7 +188,7 @@ namespace QuantConnect.Algorithm.CSharp
         /// </summary>
         public Dictionary<string, string> ExpectedStatistics => new Dictionary<string, string>
         {
-            {"Total Trades", "2"},
+            {"Total Orders", "2"},
             {"Average Win", "0.53%"},
             {"Average Loss", "0%"},
             {"Compounding Annual Return", "3.011%"},
